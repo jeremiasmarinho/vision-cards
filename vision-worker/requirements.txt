@@ -1,0 +1,5 @@
+mss==9.0.1
+opencv-python==4.9.0.80
+numpy==1.26.4
+websocket-client==1.8.0
+
