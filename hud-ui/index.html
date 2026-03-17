@@ -2,14 +2,10 @@
 <html lang="pt-BR">
   <head>
     <meta charset="utf-8" />
-    <title>HUD - Baralho Vivo</title>
+    <title>HUD PLO6 — Acessibilidade</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-      * {
-        box-sizing: border-box;
-        margin: 0;
-        padding: 0;
-      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
 
       body {
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -17,122 +13,320 @@
         color: #f9fafb;
         min-height: 100vh;
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: center;
+        padding: 24px 16px;
       }
 
-      .hud-container {
-        background: radial-gradient(circle at top left, #1f2937, #020617);
-        border-radius: 16px;
-        border: 1px solid rgba(148, 163, 184, 0.4);
-        box-shadow: 0 18px 60px rgba(15, 23, 42, 0.9);
-        padding: 20px 24px;
-        width: min(480px, 100%);
-      }
-
-      .hud-header {
+      .hud {
+        width: min(540px, 100%);
         display: flex;
-        justify-content: space-between;
-        align-items: baseline;
-        margin-bottom: 16px;
+        flex-direction: column;
+        gap: 12px;
       }
 
-      .hud-title {
-        font-size: 1.1rem;
-        font-weight: 600;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        color: #e5e7eb;
+      /* ── Block ── */
+      .block {
+        background: radial-gradient(circle at top left, #1f2937, #020617);
+        border-radius: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+        padding: 15px 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
       }
 
-      .hud-subtitle {
-        font-size: 0.8rem;
-        color: #9ca3af;
-      }
-
-      .deck-meta {
+      .block-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 12px;
-        font-size: 0.8rem;
-        color: #9ca3af;
       }
 
-      .status-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 999px;
-        margin-right: 6px;
+      .block-title {
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #6b7280;
       }
 
+      /* ── Connection status ── */
       .status {
         display: inline-flex;
         align-items: center;
-        gap: 4px;
-      }
-
-      .status.connected .status-dot {
-        background: #22c55e;
-        box-shadow: 0 0 12px rgba(34, 197, 94, 0.7);
-      }
-
-      .status.disconnected .status-dot {
-        background: #ef4444;
-        box-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
-      }
-
-      .cards-grid {
-        display: flex;
-        flex-wrap: wrap;
         gap: 6px;
-        max-height: 260px;
-        overflow-y: auto;
-        padding-right: 4px;
+        font-size: 0.74rem;
+        color: #9ca3af;
+      }
+      .status-dot {
+        width: 7px; height: 7px;
+        border-radius: 50%; flex-shrink: 0;
+      }
+      .status.connected    .status-dot { background: #22c55e; box-shadow: 0 0 10px #22c55e88; }
+      .status.disconnected .status-dot { background: #ef4444; box-shadow: 0 0 8px  #ef444488; }
+
+      /* ── Chips ── */
+      .chips {
+        display: flex; flex-wrap: wrap;
+        gap: 6px; min-height: 32px; align-items: center;
+      }
+      .chip {
+        padding: 4px 10px; border-radius: 999px;
+        font-size: 0.8rem; font-weight: 600;
+        letter-spacing: 0.05em; text-transform: uppercase;
+      }
+      .chip-hand {
+        font-size: 0.88rem; padding: 6px 13px;
+        border: 1.5px solid rgba(148,163,184,.45);
+        background: rgba(15,23,42,.9); color: #e5e7eb;
+      }
+      .chip-hand.h, .chip-hand.d { color: #f87171; border-color: #f8717166; }
+      .chip-hand.s, .chip-hand.c { color: #93c5fd; border-color: #93c5fd66; }
+
+      .chip-board {
+        font-size: 0.83rem; padding: 5px 11px;
+        border: 1.5px solid rgba(148,163,184,.35);
+        background: rgba(15,23,42,.8); color: #d1d5db;
+      }
+      .chip-board.h, .chip-board.d { color: #fca5a5; border-color: #fca5a566; }
+      .chip-board.s, .chip-board.c { color: #bfdbfe; border-color: #bfdbfe66; }
+
+      .chip-deck {
+        padding: 3px 7px; font-size: 0.67rem;
+        border: 1px solid rgba(75,85,99,.5);
+        background: rgba(31,41,55,.7); color: #6b7280;
+      }
+      .deck-chips {
+        display: flex; flex-wrap: wrap; gap: 4px;
+        max-height: 120px; overflow-y: auto;
       }
 
-      .card-chip {
-        padding: 4px 8px;
-        border-radius: 999px;
-        border: 1px solid rgba(148, 163, 184, 0.7);
-        font-size: 0.78rem;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(31, 41, 55, 0.9));
-        color: #e5e7eb;
+      .street-badge {
+        font-size: 0.68rem; font-weight: 700;
+        letter-spacing: 0.08em; text-transform: uppercase;
+        padding: 2px 8px; border-radius: 6px;
+        background: rgba(99,102,241,.18); color: #a5b4fc;
+        border: 1px solid #6366f133;
       }
 
-      .empty-state {
-        font-size: 0.88rem;
-        color: #6b7280;
-        text-align: center;
-        padding: 18px 0 12px;
+      .empty {
+        font-size: 0.78rem; color: #374151; font-style: italic;
       }
+
+      /* ── Equity block ── */
+      .equity-row {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+
+      .equity-pct {
+        font-size: 3rem; font-weight: 800;
+        line-height: 1; letter-spacing: -0.03em;
+        min-width: 96px;
+        transition: color 0.4s;
+      }
+      .equity-pct.raise   { color: #4ade80; }
+      .equity-pct.call    { color: #fde047; }
+      .equity-pct.fold    { color: #f87171; }
+      .equity-pct.pending { color: #374151; }
+
+      .equity-right {
+        display: flex; flex-direction: column; gap: 7px; flex: 1;
+      }
+
+      .action-badge {
+        display: inline-block;
+        padding: 4px 16px; border-radius: 8px;
+        font-size: 0.95rem; font-weight: 800;
+        letter-spacing: 0.1em; text-transform: uppercase;
+        width: fit-content;
+      }
+      .action-badge.raise {
+        background: rgba(34,197,94,.18); color: #4ade80;
+        border: 1.5px solid #22c55e44;
+      }
+      .action-badge.call {
+        background: rgba(234,179,8,.15); color: #fde047;
+        border: 1.5px solid #eab30844;
+      }
+      .action-badge.fold {
+        background: rgba(239,68,68,.15); color: #f87171;
+        border: 1.5px solid #ef444444;
+      }
+      .action-badge.pending {
+        background: rgba(75,85,99,.2); color: #4b5563;
+        border: 1.5px solid #37415144;
+      }
+
+      .equity-label {
+        font-size: 0.76rem; color: #9ca3af; line-height: 1.4;
+      }
+
+      .equity-bar-track {
+        height: 5px; border-radius: 3px;
+        background: rgba(55,65,81,.7); overflow: hidden;
+      }
+      .equity-bar-fill {
+        height: 100%; border-radius: 3px;
+        transition: width 0.6s ease, background 0.4s;
+      }
+
+      .equity-meta {
+        font-size: 0.68rem; color: #4b5563;
+      }
+
+      /* ── TTS panel ── */
+      .tts-grid {
+        display: grid;
+        grid-template-columns: auto 1fr 1fr;
+        gap: 10px; align-items: end;
+      }
+
+      .tts-toggle {
+        padding: 8px 16px; border-radius: 10px;
+        border: 1.5px solid rgba(148,163,184,.3);
+        background: rgba(31,41,55,.8); color: #e5e7eb;
+        font-size: 0.82rem; font-weight: 600;
+        cursor: pointer; transition: all 0.15s; white-space: nowrap;
+      }
+      .tts-toggle:hover { background: rgba(55,65,81,.9); }
+      .tts-toggle.on {
+        background: rgba(34,197,94,.14);
+        border-color: #22c55e88; color: #4ade80;
+      }
+
+      .field label {
+        display: block; font-size: 0.67rem;
+        letter-spacing: 0.08em; text-transform: uppercase;
+        color: #6b7280; margin-bottom: 4px;
+      }
+      .field select {
+        width: 100%; padding: 6px 8px; border-radius: 8px;
+        border: 1px solid rgba(148,163,184,.22);
+        background: rgba(31,41,55,.8); color: #d1d5db;
+        font-size: 0.77rem; cursor: pointer;
+      }
+
+      .tts-last {
+        font-size: 0.73rem; color: #374151; font-style: italic;
+        min-height: 16px; overflow: hidden;
+        text-overflow: ellipsis; white-space: nowrap;
+      }
+
+      .reset-btn {
+        padding: 6px 14px; border-radius: 8px;
+        border: 1px solid rgba(239,68,68,.3);
+        background: rgba(239,68,68,.08); color: #f87171;
+        font-size: 0.76rem; cursor: pointer;
+        transition: background 0.15s;
+      }
+      .reset-btn:hover { background: rgba(239,68,68,.18); }
     </style>
   </head>
   <body>
-    <div class="hud-container">
-      <div class="hud-header">
-        <div class="hud-title">Baralho Vivo</div>
-        <div class="hud-subtitle">Estado compartilhado em tempo real</div>
-      </div>
+    <div class="hud">
 
-      <div class="deck-meta">
-        <div id="connection-status" class="status disconnected">
-          <span class="status-dot"></span>
-          <span class="status-label">Desconectado</span>
-        </div>
-        <div>
-          Cartas restantes: <span id="deck-count">0</span> / 52
+      <!-- ── Header ── -->
+      <div class="block">
+        <div class="block-header">
+          <span class="block-title">HUD PLO6 — Acessibilidade</span>
+          <div id="conn-status" class="status disconnected">
+            <span class="status-dot"></span>
+            <span id="conn-label">Desconectado</span>
+          </div>
         </div>
       </div>
 
-      <div id="cards-container" class="cards-grid"></div>
-      <div id="empty-state" class="empty-state">Aguardando estado do servidor...</div>
+      <!-- ── Equity ── -->
+      <div class="block">
+        <div class="block-header">
+          <span class="block-title">Equidade &amp; Decisão</span>
+          <span id="equity-street" class="street-badge" style="display:none"></span>
+        </div>
+
+        <div class="equity-row">
+          <div id="equity-pct" class="equity-pct pending">—</div>
+          <div class="equity-right">
+            <span id="action-badge" class="action-badge pending">Calculando...</span>
+            <span id="equity-label" class="equity-label">Aguardando detecção de cartas</span>
+            <div class="equity-bar-track">
+              <div id="equity-bar" class="equity-bar-fill" style="width:0%;background:#374151"></div>
+            </div>
+            <span id="equity-meta" class="equity-meta"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Mão ── -->
+      <div class="block">
+        <div class="block-header">
+          <span class="block-title">Mão do Herói</span>
+        </div>
+        <div id="hand-chips" class="chips">
+          <span class="empty">Aguardando cartas...</span>
+        </div>
+      </div>
+
+      <!-- ── Board ── -->
+      <div class="block">
+        <div class="block-header">
+          <span class="block-title">Board</span>
+          <span id="street-badge" class="street-badge" style="display:none"></span>
+        </div>
+        <div id="board-chips" class="chips">
+          <span class="empty">Preflop</span>
+        </div>
+      </div>
+
+      <!-- ── Baralho ── -->
+      <div class="block">
+        <div class="block-header">
+          <span class="block-title">Baralho Vivo</span>
+          <span style="font-size:.76rem;color:#9ca3af">
+            <span id="deck-count">52</span> / 52 cartas
+          </span>
+        </div>
+        <div id="deck-chips" class="deck-chips"></div>
+      </div>
+
+      <!-- ── TTS ── -->
+      <div class="block">
+        <div class="block-header">
+          <span class="block-title">Voz (Acessibilidade)</span>
+          <button class="reset-btn" onclick="resetDeck()">Resetar Mão</button>
+        </div>
+
+        <div class="tts-grid">
+          <button id="tts-toggle" class="tts-toggle" onclick="toggleTts()">
+            Voz Desligada
+          </button>
+          <div class="field">
+            <label>Voz</label>
+            <select id="voice-select"></select>
+          </div>
+          <div class="field">
+            <label>Velocidade</label>
+            <select id="speed-select">
+              <option value="0.7">Devagar</option>
+              <option value="1.0" selected>Normal</option>
+              <option value="1.3">Rápido</option>
+              <option value="1.6">Muito Rápido</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="tts-last" class="tts-last">—</div>
+      </div>
+
     </div>
 
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" integrity="sha384-6BvThI1+wroJgDsQY5KneBC9ZUi1c9V+uSi/TFoiHzpWFmdhEChpLTwydxltICc2" crossorigin="anonymous"></script>
+    <script
+      src="https://cdn.socket.io/4.7.5/socket.io.min.js"
+      integrity="sha384-6BvThI1+wroJgDsQY5KneBC9ZUi1c9V+uSi/TFoiHzpWFmdhEChpLTwydxltICc2"
+      crossorigin="anonymous"
+    ></script>
     <script src="./app.js"></script>
   </body>
 </html>
-
