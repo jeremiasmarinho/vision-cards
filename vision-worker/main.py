@@ -1,3 +1,18 @@
+"""
+vision-worker/main.py  —  Versão de produção  (arquitetura corrigida por engenharia reversa)
+==============================================================================================
+
+CIFRA ORIGINAL DESCOBERTA:
+  - Template names: {RANK}_{variant_id}.png  →  prefixo antes de '_' é o rank
+  - Suit:  determinado por análise de COR dos pixels não-brancos da carta
+      dr = r - max(g, b) > 40  → 'h'  (Vermelho  = Copas    ♥)
+      dg = g - max(r, b) > 25  → 'c'  (Verde     = Paus     ♣)
+      db = b - max(r, g) > 25  → 'd'  (Azul      = Ouros    ♦)
+      else                     → 's'  (Escuro    = Espadas  ♠)
+  - Threshold de rank matching: 0.65 (interno ao _rank_from_template original)
+  - Threshold de match geral:   0.85 (MATCH_THRESHOLD configurável)
+"""
+
 import configparser
 import glob
 import json
@@ -14,41 +29,57 @@ from equity_calc import calculate_equity
 from advice_engine import get_advice
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# CONFIGURAÇÃO GLOBAL
+# ══════════════════════════════════════════════════════════════════════════════
+
 WEBSOCKET_URL      = "ws://localhost:3000"
-TEMPLATE_THRESHOLD = 0.85
-ANCHOR_THRESHOLD   = 0.80          # confiança mínima para aceitar a posição da âncora
-LAYOUT_SECTION     = "Layout_2ancoras"
-EQUITY_SIMULATIONS = 800
-EQUITY_OPPONENTS   = 2
+RANK_MATCH_THRESHOLD = 0.65   # limiar para aceitar rank (extraído do bytecode original)
+MATCH_THRESHOLD      = 0.85   # limiar geral de detecção de carta (ajustável)
+ANCHOR_THRESHOLD     = 0.80
+LAYOUT_SECTION       = "Layout_monitor_esq"
+SHOW_DEBUG_WINDOWS   = True
+EQUITY_SIMULATIONS   = 800
+EQUITY_OPPONENTS     = 2
 
 _STREET_MAP: dict[int, str] = {0: "Preflop", 3: "Flop", 4: "Turn", 5: "River"}
 
-# ── Variáveis globais de offset (atualizadas pelo radar de âncora) ─────────────
+# Pixels acima deste valor em todos os canais RGB são considerados "brancos" (ignorados)
+_WHITE_THRESHOLD = 240
+
+# Limiares da dominância de canal para determinar naipe (extraídos de _map_color_to_suit)
+_RED_DOM_THRESHOLD   = 40    # dr > 40 → Copas   'h'
+_GREEN_DOM_THRESHOLD = 25    # dg > 25 → Paus    'c'
+_BLUE_DOM_THRESHOLD  = 25    # db > 25 → Ouros   'd'
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ESTADO GLOBAL DE OFFSET (anchor tracking)
+# ══════════════════════════════════════════════════════════════════════════════
+
 GLOBAL_OFFSET_X: int = 0
 GLOBAL_OFFSET_Y: int = 0
 
-# ── Estado da âncora (carregado uma vez em on_open) ────────────────────────────
 _anchor_img:    np.ndarray | None = None
 _anchor_std_cx: int = 0
 _anchor_std_cy: int = 0
 
 
-# ── Equity cache (thread-safe) ────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# EQUITY CACHE (thread-safe)
+# ══════════════════════════════════════════════════════════════════════════════
 
 class _EquityCache:
-    """Mantém o último resultado de equidade calculado em background."""
-
     def __init__(self) -> None:
         self._data: dict | None = None
-        self._lock = threading.Lock()
-        self._busy = False
+        self._lock  = threading.Lock()
+        self._busy  = False
 
     def get(self) -> dict | None:
         with self._lock:
             return dict(self._data) if self._data else None
 
     def launch(self, hand: list[str], board: list[str]) -> None:
-        """Dispara cálculo em thread daemon; ignora se já estiver rodando."""
         with self._lock:
             if self._busy:
                 return
@@ -66,7 +97,7 @@ class _EquityCache:
                 with self._lock:
                     self._data = {**result, **advice}
             except Exception as exc:
-                print(f"[EQUITY] Erro: {exc}")
+                print(f"[EQUITY] Erro: {exc}", flush=True)
             finally:
                 with self._lock:
                     self._busy = False
@@ -81,7 +112,9 @@ class _EquityCache:
 _equity_cache = _EquityCache()
 
 
-# ── Config / regiões ──────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# CONFIG / REGIÕES
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _get_base_dir() -> str:
     return os.path.dirname(os.path.abspath(__file__))
@@ -91,13 +124,17 @@ def _load_regions(prefix: str, count: int) -> list[dict]:
     base_dir    = _get_base_dir()
     config_path = os.path.join(base_dir, "config.ini")
 
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"[CONFIG] config.ini não encontrado em: {base_dir}")
+
     parser = configparser.ConfigParser()
     parser.read(config_path, encoding="utf-8")
 
     if LAYOUT_SECTION not in parser:
-        raise ValueError(f"Seção [{LAYOUT_SECTION}] não encontrada em config.ini")
+        secs = list(parser.sections())
+        raise ValueError(f"[CONFIG] Seção [{LAYOUT_SECTION}] não encontrada. Disponíveis: {secs}")
 
-    section = parser[LAYOUT_SECTION]
+    section  = parser[LAYOUT_SECTION]
     regions: list[dict] = []
 
     for i in range(1, count + 1):
@@ -107,9 +144,10 @@ def _load_regions(prefix: str, count: int) -> list[dict]:
         raw   = section.get(key, "").strip()
         parts = [p.strip() for p in raw.split(",")]
         if len(parts) != 4:
-            raise ValueError(f"Valor inválido para {key}: '{raw}'")
+            raise ValueError(f"[CONFIG] Valor inválido para '{key}': '{raw}'")
         left, top, width, height = map(int, parts)
         regions.append({"top": top, "left": left, "width": width, "height": height})
+        print(f"[CONFIG] {key} => left={left} top={top} w={width} h={height}", flush=True)
 
     return regions
 
@@ -118,121 +156,219 @@ def load_hand_regions()  -> list[dict]: return _load_regions("hand_card",  6)
 def load_board_regions() -> list[dict]: return _load_regions("board_card", 5)
 
 
-def load_anchor_config() -> tuple[np.ndarray | None, int, int]:
-    """Lê anchor_template, anchor_std_cx e anchor_std_cy da seção atual do config.ini.
+# ══════════════════════════════════════════════════════════════════════════════
+# ÂNCORA
+# ══════════════════════════════════════════════════════════════════════════════
 
-    Retorna (imagem_ancora_grayscale | None, std_cx, std_cy).
-    """
+def load_anchor_config() -> tuple[np.ndarray | None, int, int]:
     base_dir    = _get_base_dir()
     config_path = os.path.join(base_dir, "config.ini")
-
-    parser = configparser.ConfigParser()
+    parser      = configparser.ConfigParser()
     parser.read(config_path, encoding="utf-8")
 
     if LAYOUT_SECTION not in parser:
-        print(f"[ANCHOR] Seção [{LAYOUT_SECTION}] não encontrada — tracking desabilitado.")
+        print(f"[ANCHOR] Seção [{LAYOUT_SECTION}] não encontrada — tracking desabilitado.", flush=True)
         return None, 0, 0
 
-    section = parser[LAYOUT_SECTION]
-
+    section  = parser[LAYOUT_SECTION]
     tpl_name = section.get("anchor_template", "").strip()
     std_cx   = int(float(section.get("anchor_std_cx", "0")))
     std_cy   = int(float(section.get("anchor_std_cy", "0")))
 
     if not tpl_name:
-        print("[ANCHOR] Chave 'anchor_template' vazia — tracking desabilitado.")
+        print("[ANCHOR] anchor_template vazia — tracking desabilitado.", flush=True)
         return None, std_cx, std_cy
 
     tpl_path = os.path.join(base_dir, tpl_name)
     img = cv2.imread(tpl_path, cv2.IMREAD_GRAYSCALE)
-
     if img is None:
-        print(f"[ANCHOR] Template '{tpl_name}' não encontrado em {base_dir} — tracking desabilitado.")
+        print(f"[ANCHOR] '{tpl_name}' não encontrado — tracking desabilitado.", flush=True)
         return None, std_cx, std_cy
 
-    print(f"[ANCHOR] Âncora carregada: '{tpl_name}'  std=({std_cx}, {std_cy})")
+    print(f"[ANCHOR] Âncora: '{tpl_name}'  std=({std_cx}, {std_cy})", flush=True)
     return img, std_cx, std_cy
 
 
-# ── Radar de âncora ───────────────────────────────────────────────────────────
-
 def update_offset(sct: mss.mss) -> None:
-    """Captura o desktop inteiro, procura a âncora e atualiza GLOBAL_OFFSET_X/Y.
-
-    Se a âncora não for encontrada com confiança ≥ ANCHOR_THRESHOLD, o offset
-    anterior é mantido (fail-safe: não piora uma calibração anterior).
-    """
     global GLOBAL_OFFSET_X, GLOBAL_OFFSET_Y
-
     if _anchor_img is None:
         return
-
-    # Monitor 0 = virtual desktop completo (cobre todos os monitores)
-    full_screen = sct.monitors[0]
-    screenshot  = sct.grab(full_screen)
-    gray        = cv2.cvtColor(np.array(screenshot), cv2.COLOR_BGRA2GRAY)
-
-    result = cv2.matchTemplate(gray, _anchor_img, cv2.TM_CCOEFF_NORMED)
+    screenshot = sct.grab(sct.monitors[0])
+    gray       = cv2.cvtColor(np.array(screenshot), cv2.COLOR_BGRA2GRAY)
+    result     = cv2.matchTemplate(gray, _anchor_img, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, max_loc = cv2.minMaxLoc(result)
-
     if max_val >= ANCHOR_THRESHOLD:
-        found_x, found_y = max_loc
-        new_ox = found_x - _anchor_std_cx
-        new_oy = found_y - _anchor_std_cy
-
+        new_ox = max_loc[0] - _anchor_std_cx
+        new_oy = max_loc[1] - _anchor_std_cy
         if new_ox != GLOBAL_OFFSET_X or new_oy != GLOBAL_OFFSET_Y:
-            print(f"[ANCHOR] Offset atualizado: ({GLOBAL_OFFSET_X}, {GLOBAL_OFFSET_Y})"
-                  f" -> ({new_ox}, {new_oy})  confiança={max_val:.3f}")
+            print(f"[ANCHOR] Offset ({GLOBAL_OFFSET_X},{GLOBAL_OFFSET_Y})->"
+                  f"({new_ox},{new_oy}) conf={max_val:.3f}", flush=True)
             GLOBAL_OFFSET_X = new_ox
             GLOBAL_OFFSET_Y = new_oy
     else:
-        print(f"[ANCHOR] Âncora não encontrada (max={max_val:.3f} < {ANCHOR_THRESHOLD}) — offset mantido.")
+        print(f"[ANCHOR] Não encontrada (conf={max_val:.3f}) — offset mantido.", flush=True)
 
 
-# ── Templates ─────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# TEMPLATES DE RANK
+#
+# Arquitetura original (extraída por engenharia reversa):
+#   - load_templates() agrupa por RANK: {'A': [img1, img2, ...], 'K': [...], ...}
+#   - Regra de nome: split('_')[0].upper()  →  'A_3.png' → rank 'A'
+#   - Exclui arquivos que começam com 'template_' ou 'tpl_'
+# ══════════════════════════════════════════════════════════════════════════════
 
-def load_templates() -> dict[str, np.ndarray]:
-    base_dir  = _get_base_dir()
-    templates: dict[str, np.ndarray] = {}
-    for path in glob.glob(os.path.join(base_dir, "*.png")):
-        name = os.path.splitext(os.path.basename(path))[0]
-        img  = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-        if img is not None:
-            templates[name] = img
+# Ranks válidos (único conjunto aceito — evita lixo de outros PNGs)
+_VALID_RANKS = frozenset({'A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'})
+
+
+def load_templates() -> dict[str, list[np.ndarray]]:
+    """Carrega templates agrupados por rank char.
+
+    Retorna: {'A': [img, img, ...], 'K': [...], ...}
+    """
+    base_dir   = _get_base_dir()
+    templates: dict[str, list[np.ndarray]] = {}
+    skipped    = 0
+
+    for path in sorted(glob.glob(os.path.join(base_dir, "*.png"))):
+        basename = os.path.splitext(os.path.basename(path))[0]
+
+        # Excluir âncoras e templates de UI
+        if basename.startswith("tpl_") or basename.startswith("template_"):
+            skipped += 1
+            continue
+
+        # Extrair rank: parte antes de '_', maiúscula
+        rank = basename.split("_")[0].upper()
+        if rank not in _VALID_RANKS:
+            skipped += 1
+            continue
+
+        img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            continue
+
+        templates.setdefault(rank, []).append(img)
+
+    total_imgs  = sum(len(v) for v in templates.values())
+    total_ranks = len(templates)
+    print(f"[TEMPLATES] {total_ranks} ranks carregados, {total_imgs} imagens no total "
+          f"({skipped} arquivos ignorados)", flush=True)
+
+    for rank, imgs in sorted(templates.items()):
+        print(f"  rank '{rank}': {len(imgs)} template(s)", flush=True)
+
     return templates
 
 
-# ── Detecção ──────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# DETECÇÃO DE NAIPE POR COR  (_map_color_to_suit original, reconstruída)
+# ══════════════════════════════════════════════════════════════════════════════
 
-def _match_region(
-    sct: mss.mss,
-    region: dict,
-    templates: dict[str, np.ndarray],
-    preview_title: str | None = None,
-) -> str | None:
-    screenshot = sct.grab(region)
-    gray       = cv2.cvtColor(np.array(screenshot), cv2.COLOR_BGRA2GRAY)
+def _map_color_to_suit(r: float, g: float, b: float) -> str:
+    """Determina o naipe pela dominância de canal de cor.
 
-    best_name  = None
+    Limiares extraídos do bytecode original (consts = [40, 'h', 25, 'c', 'd', 's']):
+      dr = r - max(g, b) > 40 → 'h'  (Vermelho  → Copas    ♥)
+      dg = g - max(r, b) > 25 → 'c'  (Verde     → Paus     ♣)
+      db = b - max(r, g) > 25 → 'd'  (Azul      → Ouros    ♦)
+      else                    → 's'  (Escuro    → Espadas  ♠)
+    """
+    dr = r - max(g, b)
+    dg = g - max(r, b)
+    db = b - max(r, g)
+    if dr > _RED_DOM_THRESHOLD:   return 'h'
+    if dg > _GREEN_DOM_THRESHOLD: return 'c'
+    if db > _BLUE_DOM_THRESHOLD:  return 'd'
+    return 's'
+
+
+def _average_rgb_nonwhite(bgra_img: np.ndarray) -> tuple[float, float, float]:
+    """Calcula a média RGB dos pixels relevantes na região central da carta.
+
+    Filtros aplicados (fundo e bordas excluídos):
+      - Recorta 15%–85% da imagem (remove bordas)
+      - Ignora pixels muito claros  (todos canais > 240) — fundo branco da carta
+      - Ignora pixels muito escuros (todos canais <  30) — bordas pretas / sombra
+    """
+    h, w = bgra_img.shape[:2]
+    if h < 4 or w < 4:
+        return 0.0, 0.0, 0.0
+
+    y0, y1 = int(h * 0.15), int(h * 0.85)
+    x0, x1 = int(w * 0.15), int(w * 0.85)
+    crop = bgra_img[y0:y1, x0:x1]
+
+    # Converte BGRA → RGB
+    rgb = cv2.cvtColor(crop, cv2.COLOR_BGRA2RGB).astype(np.float32)
+    r_ch, g_ch, b_ch = rgb[:,:,0], rgb[:,:,1], rgb[:,:,2]
+
+    # Máscara: exclui branco (fundo) E preto (bordas)
+    is_white = (r_ch > _WHITE_THRESHOLD) & (g_ch > _WHITE_THRESHOLD) & (b_ch > _WHITE_THRESHOLD)
+    is_dark  = (r_ch < 30) & (g_ch < 30) & (b_ch < 30)
+    mask     = ~(is_white | is_dark)
+
+    n = int(mask.sum())
+    if n == 0:
+        return 0.0, 0.0, 0.0
+
+    return float(r_ch[mask].mean()), float(g_ch[mask].mean()), float(b_ch[mask].mean())
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DETECÇÃO DE RANK POR TEMPLATE MATCHING  (_rank_from_template original)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _rank_from_template(
+    gray_region: np.ndarray,
+    templates:   dict[str, list[np.ndarray]],
+) -> tuple[str | None, float]:
+    """Compara a região binarizada contra todos os templates de rank.
+
+    Lógica extraída de _rank_from_template original:
+      - Binariza com threshold 150/255
+      - Redimensiona template para caber na região (se necessário)
+      - Retorna (best_rank, best_score) ou (None, 0.0)
+      - Threshold interno original: 0.65
+    """
+    # Binarização como no original (threshold=150, THRESH_BINARY)
+    _, binary = cv2.threshold(gray_region, 150, 255, cv2.THRESH_BINARY)
+    rh, rw    = binary.shape[:2]
+
+    best_rank  = None
     best_score = -1.0
 
-    for name, template in templates.items():
-        if gray.shape[0] < template.shape[0] or gray.shape[1] < template.shape[1]:
-            continue
-        result = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, _ = cv2.minMaxLoc(result)
-        if max_val > best_score:
-            best_score = max_val
-            best_name  = name
+    for rank, img_list in templates.items():
+        for tpl in img_list:
+            th, tw = tpl.shape[:2]
 
-    if preview_title:
-        cv2.imshow(preview_title, gray)
+            # Redimensiona se necessário (proteção de dimensão)
+            if th > rh or tw > rw:
+                scale = min(rh / th, rw / tw)
+                tpl   = cv2.resize(tpl, (max(1, int(tw*scale)), max(1, int(th*scale))),
+                                   interpolation=cv2.INTER_AREA)
+                th, tw = tpl.shape[:2]
 
-    return best_name if best_name and best_score >= TEMPLATE_THRESHOLD else None
+            if th > rh or tw > rw:
+                continue
 
+            res = cv2.matchTemplate(binary, tpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(res)
+            if max_val > best_score:
+                best_score = max_val
+                best_rank  = rank
+
+    if best_rank and best_score >= RANK_MATCH_THRESHOLD:
+        return best_rank, best_score
+    return None, best_score
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PIPELINE COMPLETO: CAPTURA → RANK + NAIPE → CÓDIGO DE CARTA
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _apply_offset(region: dict) -> dict:
-    """Retorna uma cópia da região com GLOBAL_OFFSET_X/Y somados a left/top."""
     return {
         "top":    region["top"]    + GLOBAL_OFFSET_Y,
         "left":   region["left"]   + GLOBAL_OFFSET_X,
@@ -241,40 +377,118 @@ def _apply_offset(region: dict) -> dict:
     }
 
 
+def _detect_card(
+    sct:          mss.mss,
+    region:       dict,
+    templates:    dict[str, list[np.ndarray]],
+    label:        str  = "?",
+    show_preview: bool = True,
+) -> tuple[str | None, str, float, str, float, float, float]:
+    """Captura uma região e executa os dois estágios de detecção.
+
+    Retorna:
+        (card_code | None, rank, rank_score, suit, dr, dg, db)
+    """
+    screenshot = sct.grab(region)
+    bgra       = np.array(screenshot)
+    gray       = cv2.cvtColor(bgra, cv2.COLOR_BGRA2GRAY)
+
+    if np.sum(gray) == 0:
+        print(f"[ERRO] Captura preta detetada em '{label}'. "
+              "Verifica o motor gráfico do emulador ou o posicionamento da janela.", flush=True)
+
+    if SHOW_DEBUG_WINDOWS and show_preview:
+        reg_h, reg_w = gray.shape[:2]
+        scale    = max(1, min(8, 200 // max(reg_h, reg_w, 1)))
+        enlarged = cv2.resize(gray, (reg_w * scale, reg_h * scale),
+                              interpolation=cv2.INTER_NEAREST)
+        cv2.imshow(f"Carta {label}", enlarged)
+
+    # ── Estágio 1: Rank por template matching ────────────────────────────────
+    rank, rank_score = _rank_from_template(gray, templates)
+
+    # ── Estágio 2: Naipe por análise RGB da imagem colorida original ─────────
+    r, g, b = _average_rgb_nonwhite(bgra)           # BGR capturado como BGRA
+    dr = r - max(g, b)
+    dg = g - max(r, b)
+    db = b - max(r, g)
+    suit = _map_color_to_suit(r, g, b)
+
+    if rank is None:
+        return None, "?", rank_score, suit, dr, dg, db
+
+    return rank + suit, rank, rank_score, suit, dr, dg, db
+
+
 def process_frame(
-    sct: mss.mss,
-    hand_regions: list[dict],
+    sct:           mss.mss,
+    hand_regions:  list[dict],
     board_regions: list[dict],
-    templates: dict[str, np.ndarray],
+    templates:     dict[str, list[np.ndarray]],
 ) -> tuple[list[str], list[str]]:
+    """Detecta cartas na mão e no board e retorna listas de códigos de carta."""
     hand_cards: list[str] = []
+
     for idx, region in enumerate(hand_regions, start=1):
-        card = _match_region(sct, _apply_offset(region), templates, f"Olho do Bot - Carta {idx}")
-        if card:
-            hand_cards.append(card)
+        card_code, rank, score, suit, dr, dg, db = _detect_card(
+            sct, _apply_offset(region), templates,
+            label=str(idx), show_preview=True,
+        )
+
+        # Decide qual delta é dominante para o log
+        dom_label = (f"dr={dr:.0f}" if dr > dg and dr > db else
+                     f"dg={dg:.0f}" if dg > db else f"db={db:.0f}")
+
+        if card_code:
+            hand_cards.append(card_code)
+            print(f"[MÃO] Região {idx}: Rank '{rank}' (match {score:.2f})"
+                  f" | Cor {dom_label} -> '{card_code}'", flush=True)
+        else:
+            print(f"[MÃO] Região {idx}: Rank '?' (match {score:.2f} < {RANK_MATCH_THRESHOLD})"
+                  f" | Cor {dom_label} -> '{suit}' (descartado)", flush=True)
 
     board_cards: list[str] = []
-    for region in board_regions:
-        card = _match_region(sct, _apply_offset(region), templates)
-        if card:
-            board_cards.append(card)
 
-    cv2.waitKey(1)
+    for idx, region in enumerate(board_regions, start=1):
+        card_code, rank, score, suit, dr, dg, db = _detect_card(
+            sct, _apply_offset(region), templates,
+            label=f"B{idx}", show_preview=False,
+        )
+        dom_label = (f"dr={dr:.0f}" if dr > dg and dr > db else
+                     f"dg={dg:.0f}" if dg > db else f"db={db:.0f}")
+        if card_code:
+            board_cards.append(card_code)
+            print(f"[BOARD] Região {idx}: Rank '{rank}' (match {score:.2f})"
+                  f" | Cor {dom_label} -> '{card_code}'", flush=True)
+
+    if SHOW_DEBUG_WINDOWS:
+        cv2.waitKey(1)
     return hand_cards, board_cards
 
 
-# ── WebSocket callbacks ───────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# WEBSOCKET
+# ══════════════════════════════════════════════════════════════════════════════
 
 def on_open(ws: websocket.WebSocketApp) -> None:
     global _anchor_img, _anchor_std_cx, _anchor_std_cy
 
-    hand_regions  = load_hand_regions()
-    board_regions = load_board_regions()
-    templates     = load_templates()
-    _anchor_img, _anchor_std_cx, _anchor_std_cy = load_anchor_config()
+    print("[WS] Conectado ao cerebro-central.", flush=True)
 
+    try:
+        hand_regions  = load_hand_regions()
+        board_regions = load_board_regions()
+    except (FileNotFoundError, ValueError) as exc:
+        print(exc, flush=True)
+        ws.close()
+        return
+
+    templates = load_templates()
     if not templates:
-        print("[VISION] Nenhum template .png encontrado — template matching desabilitado.")
+        print("[TEMPLATES] ERRO CRÍTICO: nenhum template carregado! "
+              f"Verifique os PNGs em {_get_base_dir()}", flush=True)
+
+    _anchor_img, _anchor_std_cx, _anchor_std_cy = load_anchor_config()
 
     prev_hand:  frozenset[str] = frozenset()
     prev_board: frozenset[str] = frozenset()
@@ -282,25 +496,25 @@ def on_open(ws: websocket.WebSocketApp) -> None:
     with mss.mss() as sct:
         try:
             while True:
-                # ── Recalibra o offset antes de ler as cartas ──────────────────
+                print("\n" + "-" * 60, flush=True)
                 update_offset(sct)
 
                 hand_cards, board_cards = process_frame(
                     sct, hand_regions, board_regions, templates
                 )
 
-                # ── Dispara equidade quando cartas mudam e mão está completa ──
+                print(f"[DETECT] Mão={hand_cards}  Board={board_cards}", flush=True)
+
                 hand_set  = frozenset(hand_cards)
                 board_set = frozenset(board_cards)
 
                 if len(hand_cards) == 6 and (hand_set != prev_hand or board_set != prev_board):
                     if hand_set != prev_hand:
-                        _equity_cache.clear()   # nova mão → descarta resultado anterior
+                        _equity_cache.clear()
                     prev_hand  = hand_set
                     prev_board = board_set
                     _equity_cache.launch(hand_cards, board_cards)
 
-                # ── Envia eventos ──
                 ws.send(json.dumps({"event": "update_hands", "payload": hand_cards}))
                 ws.send(json.dumps({"event": "update_board", "payload": board_cards}))
 
@@ -311,15 +525,32 @@ def on_open(ws: websocket.WebSocketApp) -> None:
                 time.sleep(2)
 
         except KeyboardInterrupt:
-            pass
+            print("\n[WS] Encerrando.", flush=True)
         finally:
             cv2.destroyAllWindows()
             ws.close()
 
+    if not SHOW_DEBUG_WINDOWS:
+        cv2.destroyAllWindows()
+
+
+def on_error(ws: websocket.WebSocketApp, error: Exception) -> None:
+    print(f"[WS] Erro: {error}", flush=True)
+
+
+def on_close(ws: websocket.WebSocketApp, code: int, msg: str) -> None:
+    print(f"[WS] Conexão encerrada (code={code}).", flush=True)
+
 
 def main() -> None:
-    ws_app = websocket.WebSocketApp(WEBSOCKET_URL, on_open=on_open)
-    ws_app.run_forever()
+    print(f"[INIT] Conectando a {WEBSOCKET_URL} ...", flush=True)
+    ws_app = websocket.WebSocketApp(
+        WEBSOCKET_URL,
+        on_open=on_open,
+        on_error=on_error,
+        on_close=on_close,
+    )
+    ws_app.run_forever(reconnect=5)
 
 
 if __name__ == "__main__":
