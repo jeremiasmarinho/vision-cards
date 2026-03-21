@@ -17,6 +17,7 @@ import configparser
 import glob
 import json
 import os
+import sys
 import threading
 import time
 
@@ -33,12 +34,11 @@ from advice_engine import get_advice
 # CONFIGURAÇÃO GLOBAL
 # ══════════════════════════════════════════════════════════════════════════════
 
-WEBSOCKET_URL      = "ws://localhost:3000"
+WEBSOCKET_URL      = "ws://localhost:3000/ws"
 RANK_MATCH_THRESHOLD = 0.65   # limiar para aceitar rank (extraído do bytecode original)
 MATCH_THRESHOLD      = 0.85   # limiar geral de detecção de carta (ajustável)
 ANCHOR_THRESHOLD     = 0.80
-LAYOUT_SECTION       = "Layout_monitor_esq"
-SHOW_DEBUG_WINDOWS   = True
+SHOW_DEBUG_WINDOWS   = False
 EQUITY_SIMULATIONS   = 800
 EQUITY_OPPONENTS     = 2
 
@@ -120,6 +120,48 @@ def _get_base_dir() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _resolve_layout_section(parser: configparser.ConfigParser) -> str:
+    """Resolve a seção de layout ativa via [CurrentProfile].selected.
+
+    Fallback automático para a primeira seção que comece com 'Layout_' ou 'liga_'
+    caso a seção apontada não exista no arquivo.
+    """
+    selected = ""
+    if "CurrentProfile" in parser:
+        selected = parser["CurrentProfile"].get("selected", "").strip()
+
+    if selected and selected in parser:
+        return selected
+
+    # Busca fallback
+    fallback = next(
+        (s for s in parser.sections()
+         if s.lower().startswith("layout_") or s.lower().startswith("liga_")),
+        None,
+    )
+
+    if not fallback:
+        raise ValueError(
+            "[CONFIG] Nenhuma seção de layout válida (Layout_* / liga_*) "
+            "encontrada no config.ini."
+        )
+
+    if selected:
+        print(
+            f"[ALERTA] Layout '{selected}' não encontrado no config.ini. "
+            f"Usando fallback automático: [{fallback}]",
+            flush=True,
+        )
+    else:
+        print(
+            f"[ALERTA] [CurrentProfile].selected não definido. "
+            f"Usando fallback automático: [{fallback}]",
+            flush=True,
+        )
+
+    return fallback
+
+
 def _load_regions(prefix: str, count: int) -> list[dict]:
     base_dir    = _get_base_dir()
     config_path = os.path.join(base_dir, "config.ini")
@@ -130,11 +172,8 @@ def _load_regions(prefix: str, count: int) -> list[dict]:
     parser = configparser.ConfigParser()
     parser.read(config_path, encoding="utf-8")
 
-    if LAYOUT_SECTION not in parser:
-        secs = list(parser.sections())
-        raise ValueError(f"[CONFIG] Seção [{LAYOUT_SECTION}] não encontrada. Disponíveis: {secs}")
-
-    section  = parser[LAYOUT_SECTION]
+    layout_section = _resolve_layout_section(parser)
+    section        = parser[layout_section]
     regions: list[dict] = []
 
     for i in range(1, count + 1):
@@ -166,11 +205,13 @@ def load_anchor_config() -> tuple[np.ndarray | None, int, int]:
     parser      = configparser.ConfigParser()
     parser.read(config_path, encoding="utf-8")
 
-    if LAYOUT_SECTION not in parser:
-        print(f"[ANCHOR] Seção [{LAYOUT_SECTION}] não encontrada — tracking desabilitado.", flush=True)
+    try:
+        layout_section = _resolve_layout_section(parser)
+    except ValueError as exc:
+        print(f"[ANCHOR] {exc} — tracking desabilitado.", flush=True)
         return None, 0, 0
 
-    section  = parser[LAYOUT_SECTION]
+    section = parser[layout_section]
     tpl_name = section.get("anchor_template", "").strip()
     std_cx   = int(float(section.get("anchor_std_cx", "0")))
     std_cy   = int(float(section.get("anchor_std_cy", "0")))
@@ -250,6 +291,10 @@ def load_templates() -> dict[str, list[np.ndarray]]:
             continue
 
         templates.setdefault(rank, []).append(img)
+
+    if len(templates) == 0:
+        print("[ERRO FATAL] Nenhum template PNG encontrado em vision-worker/.", flush=True)
+        sys.exit(1)
 
     total_imgs  = sum(len(v) for v in templates.values())
     total_ranks = len(templates)

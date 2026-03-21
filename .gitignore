@@ -3,3 +3,16 @@ dist/
 __pycache__/
 *.pyc
 .env
+
+# Debug / diagnóstico
+vision-worker/diag_*.png
+vision-worker/debug_crops/
+vision-worker/debug_seats/
+Capturar.PNG
+
+# Engenharia reversa (extraídos)
+extracted_modules/
+
+# Dependências instaladas localmente
+vision-worker/PIL/
+vision-worker/pillow-*.dist-info/

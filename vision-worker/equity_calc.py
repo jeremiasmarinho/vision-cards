@@ -252,6 +252,36 @@ def calculate_equity(
     }
 
 
+# ── Nome da mão ───────────────────────────────────────────────────────────────
+
+_HAND_NAMES = ["Alta", "Par", "2Pares", "Trinca", "Seq", "Flush", "Full", "Quadra", "StFl"]
+
+
+def get_hand_name(hero_cards: list[str], board_cards: list[str]) -> str:
+    """Retorna nome abreviado da melhor mão PLO6 do herói (exige board >= 3).
+
+    Avalia todas as combinações C(n_mão,2) × C(n_board,3) e retorna a classe
+    da mão mais forte encontrada.
+    """
+    if len(board_cards) < 3 or len(hero_cards) < 2:
+        return ""
+    try:
+        hero  = parse_cards(hero_cards)
+        board = parse_cards(board_cards)
+    except ValueError:
+        return ""
+    best = 0
+    n_h, n_b = len(hero), len(board)
+    for h1, h2 in combinations(range(n_h), 2):
+        for b1, b2, b3 in combinations(range(n_b), 3):
+            s = _score5(int(hero[h1]), int(hero[h2]),
+                        int(board[b1]), int(board[b2]), int(board[b3]))
+            if s > best:
+                best = s
+    cls = (best >> 20) & 0xF
+    return _HAND_NAMES[min(cls, 8)]
+
+
 # ── Teste rápido ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

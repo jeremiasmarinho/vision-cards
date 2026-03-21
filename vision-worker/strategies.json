@@ -1,0 +1,109 @@
+[
+  {
+    "id": "nuts_any",
+    "priority": 100,
+    "conditions": { "is_nuts": true },
+    "message": "NUTS! {mao_feita} — extraia o máximo",
+    "color_level": "top"
+  },
+
+  {
+    "id": "preflop_premium",
+    "priority": 90,
+    "conditions": { "street": "Preflop", "equity_ratio_min": 2.0 },
+    "message": "Preflop premium ({hero_equity}%) — abra ou 3-bet forte",
+    "color_level": "strong"
+  },
+  {
+    "id": "preflop_playable",
+    "priority": 85,
+    "conditions": { "street": "Preflop", "equity_ratio_min": 1.2 },
+    "message": "Preflop jogável ({hero_equity}%) — entre ou defenda",
+    "color_level": "medium"
+  },
+  {
+    "id": "preflop_speculative",
+    "priority": 80,
+    "conditions": { "street": "Preflop", "equity_ratio_min": 0.85 },
+    "message": "{mao_feita} — especulativa, só preço bom",
+    "color_level": "medium"
+  },
+  {
+    "id": "preflop_fold",
+    "priority": 75,
+    "conditions": { "street": "Preflop" },
+    "message": "Preflop fraco ({hero_equity}%) — descarte",
+    "color_level": "fold"
+  },
+
+  {
+    "id": "postflop_dominio_total",
+    "priority": 70,
+    "conditions": { "street": ["Flop", "Turn", "River"], "equity_ratio_min": 2.5 },
+    "message": "{mao_feita} — DOMÍNIO ({hero_equity}%), construa o pot",
+    "color_level": "strong"
+  },
+  {
+    "id": "postflop_forte",
+    "priority": 65,
+    "conditions": { "street": ["Flop", "Turn", "River"], "equity_ratio_min": 1.7 },
+    "message": "{mao_feita} forte ({hero_equity}%) — aposte por valor",
+    "color_level": "strong"
+  },
+  {
+    "id": "postflop_nut_flush_draw",
+    "priority": 60,
+    "conditions": { "street": ["Flop", "Turn"], "is_nut_flush_draw": true, "equity_ratio_min": 1.0 },
+    "message": "Nut Flush Draw + {mao_feita} ({hero_equity}%) — semi-bluff",
+    "color_level": "strong"
+  },
+  {
+    "id": "postflop_acima_fair",
+    "priority": 55,
+    "conditions": { "street": ["Flop", "Turn", "River"], "equity_ratio_min": 1.1 },
+    "message": "{mao_feita} ({hero_equity}%) acima do fair share — continue",
+    "color_level": "medium"
+  },
+  {
+    "id": "postflop_flush_draw_forte",
+    "priority": 50,
+    "conditions": { "street": ["Flop", "Turn"], "draw_quality": ["NUT", "STRONG"], "equity_ratio_min": 0.8 },
+    "message": "Flush draw {flush_draw_rank} ({hero_equity}%) — chame se der odds",
+    "color_level": "medium"
+  },
+  {
+    "id": "postflop_marginal_board_perigoso",
+    "priority": 45,
+    "conditions": { "street": ["Flop", "Turn", "River"], "is_paired_board": true, "equity_ratio_max": 1.1 },
+    "message": "Board pareado, cuidado — {mao_feita} ({hero_equity}%)",
+    "color_level": "weak"
+  },
+  {
+    "id": "postflop_flush_draw_fraco",
+    "priority": 40,
+    "conditions": { "street": ["Flop", "Turn"], "has_flush_draw": true, "equity_ratio_min": 0.6 },
+    "message": "Flush draw fraco ({hero_equity}%) — só pot controlado",
+    "color_level": "medium"
+  },
+  {
+    "id": "postflop_marginal",
+    "priority": 35,
+    "conditions": { "street": ["Flop", "Turn", "River"], "equity_ratio_min": 0.7 },
+    "message": "{mao_feita} marginal ({hero_equity}%) — pot controlado",
+    "color_level": "weak"
+  },
+  {
+    "id": "river_call_justificado",
+    "priority": 30,
+    "conditions": { "street": "River", "equity_ratio_min": 0.9 },
+    "message": "{mao_feita} ({hero_equity}%) — call justificado no river",
+    "color_level": "medium"
+  },
+  {
+    "id": "postflop_fold",
+    "priority": 10,
+    "conditions": { "street": ["Flop", "Turn", "River"] },
+    "message": "{mao_feita} fraca ({hero_equity}%) — descarte",
+    "color_level": "fold"
+  }
+]
