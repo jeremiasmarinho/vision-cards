@@ -22,6 +22,14 @@ log = logging.getLogger(__name__)
 
 PORT = 3000
 
+# ── Estado compartilhado da sala (multi-player) ───────────────────────────────
+# Armazena as cartas detectadas por cada worker independente na rede local.
+# Chave = player_id enviado pelo vision-worker (--player 1/2/3)
+local_players: dict[str, list[str]] = {"1": [], "2": [], "3": []}
+
+# Conjunto de WebSockets raw ativos (vision-workers conectados)
+ws_clients: set[web.WebSocketResponse] = set()
+
 # ── Nomes em português ────────────────────────────────────────────────────────
 
 RANK_PT: dict[str, str] = {
@@ -158,15 +166,52 @@ async def broadcast_hand() -> None:
 async def broadcast_speak(text: str) -> None:
     await sio.emit("speak", text)
 
+async def broadcast_shared_state() -> None:
+    """Consolida cartas de todos os jogadores da sala e faz broadcast via WS raw.
+
+    shared_dead_cards = board atual + mão do jogador 1 + mão do jogador 2 + mão do jogador 3
+    Essas cartas estão fisicamente na mesa e não podem aparecer no runout simulado.
+    """
+    dead_cards: list[str] = (
+        game.current_board
+        + local_players["1"]
+        + local_players["2"]
+        + local_players["3"]
+    )
+    msg = json.dumps({"event": "shared_state", "dead_cards": dead_cards})
+    log.info(f"[SHARED] Dead cards consolidadas ({len(dead_cards)}): {dead_cards}")
+
+    stale: set[web.WebSocketResponse] = set()
+    for ws_client in ws_clients:
+        try:
+            await ws_client.send_str(msg)
+        except Exception:
+            stale.add(ws_client)
+    ws_clients.difference_update(stale)
+
 
 # ── Handlers de evento ────────────────────────────────────────────────────────
 
-async def handle_update_hands(cards: list[str]) -> None:
-    ann = game.update_hand(cards)
-    await broadcast_deck()
-    await broadcast_hand()
-    if ann:
-        await broadcast_speak(ann)
+async def handle_update_hands(cards: list[str], player_id: str = "1") -> None:
+    # Atualiza o estado do jogador na sala (todos os players)
+    normalized = [c.strip().upper() for c in cards if c.strip()]
+    if player_id in local_players:
+        local_players[player_id] = normalized
+    else:
+        # Player ID fora do range esperado: registra dinamicamente
+        local_players[player_id] = normalized
+        log.warning(f"[SHARED] player_id '{player_id}' fora do range 1-3 — registrado dinamicamente.")
+
+    # Somente o jogador 1 (herói/streamer) alimenta o GameState principal (HUD + TTS)
+    if player_id == "1":
+        ann = game.update_hand(cards)
+        await broadcast_deck()
+        await broadcast_hand()
+        if ann:
+            await broadcast_speak(ann)
+
+    # Qualquer atualização de mão dispara novo broadcast do estado compartilhado
+    await broadcast_shared_state()
 
 async def handle_update_board(cards: list[str]) -> None:
     ann = game.update_board(cards)
@@ -174,6 +219,8 @@ async def handle_update_board(cards: list[str]) -> None:
     await broadcast_hand()
     if ann:
         await broadcast_speak(ann)
+    # Board atualizado → dead cards mudam → rebroadcast
+    await broadcast_shared_state()
 
 async def handle_equity_state(payload: dict) -> None:
     await sio.emit("equity_state", payload)
@@ -182,11 +229,15 @@ async def handle_equity_state(payload: dict) -> None:
         await broadcast_speak(ann)
 
 async def handle_reset() -> None:
+    # Limpa também o estado de todos os jogadores da sala
+    for pid in list(local_players):
+        local_players[pid] = []
     game.reset()
     await broadcast_deck()
     await broadcast_hand()
     await sio.emit("equity_state", None)
     await broadcast_speak("Baralho resetado. Nova mão.")
+    await broadcast_shared_state()
 
 
 # ── Socket.IO (HUD) ───────────────────────────────────────────────────────────
@@ -227,19 +278,24 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
-    log.info("[WS] Vision-worker conectado.")
+    # Registra o worker no pool global para receber shared_state broadcasts
+    ws_clients.add(ws)
+    log.info(f"[WS] Vision-worker conectado. Workers ativos: {len(ws_clients)}")
+
+    # Envia estado inicial ao worker recém-conectado
     await ws.send_str(json.dumps({"event": "deck_state", "payload": game.live_deck}))
 
     async for msg in ws:
         if msg.type != web.WSMsgType.TEXT:
             continue
         try:
-            data    = json.loads(msg.data)
-            event   = data.get("event")
-            payload = data.get("payload")
+            data      = json.loads(msg.data)
+            event     = data.get("event")
+            payload   = data.get("payload")
+            player_id = str(data.get("player_id", "1"))  # padrão: player 1
 
             if event == "update_hands" and isinstance(payload, list):
-                await handle_update_hands(payload)
+                await handle_update_hands(payload, player_id)
             elif event == "update_board" and isinstance(payload, list):
                 await handle_update_board(payload)
             elif event == "equity_state" and payload:
@@ -249,7 +305,8 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         except (json.JSONDecodeError, KeyError):
             continue
 
-    log.info("[WS] Vision-worker desconectado.")
+    ws_clients.discard(ws)
+    log.info(f"[WS] Vision-worker desconectado. Workers ativos: {len(ws_clients)}")
     return ws
 
 

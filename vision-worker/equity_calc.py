@@ -171,15 +171,19 @@ def calculate_equity(
     board_cards: list[str] | None = None,
     n_opponents: int = 2,
     n_simulations: int = 800,
+    known_dead_cards: list[str] | None = None,
 ) -> dict:
     """Calcula a equidade PLO6 via simulação Monte Carlo.
 
     Parameters
     ----------
-    hero_cards    : 6 cartas da mão do herói, e.g. ['Ah','Kd','Qc','Js','Td','9h']
-    board_cards   : 0-5 cartas comunitárias já reveladas
-    n_opponents   : número de oponentes (padrão 2)
-    n_simulations : número de simulações Monte Carlo (padrão 800)
+    hero_cards        : 6 cartas da mão do herói, e.g. ['Ah','Kd','Qc','Js','Td','9h']
+    board_cards       : 0-5 cartas comunitárias já reveladas
+    n_opponents       : número de oponentes (padrão 2)
+    n_simulations     : número de simulações Monte Carlo (padrão 800)
+    known_dead_cards  : cartas conhecidas na sala (mãos dos outros jogadores físicos).
+                        São removidas do baralho antes das simulações para garantir
+                        que o runout nunca sorteie cartas que já estão na mesa.
 
     Returns
     -------
@@ -197,6 +201,17 @@ def calculate_equity(
 
     # Cartas já conhecidas → removidas do baralho restante
     known = set(int(c) for c in list(hero) + list(board))
+
+    # Remove cartas fisicamente na sala (mãos dos outros jogadores do stream).
+    # Isso garante equidade real: nenhuma carta que está na mão de um amigo
+    # pode aparecer no runout simulado.
+    if known_dead_cards:
+        for card_str in known_dead_cards:
+            try:
+                known.add(parse_card(card_str))
+            except ValueError:
+                pass  # carta malformada é ignorada silenciosamente
+
     remaining = np.array([c for c in range(52) if c not in known], dtype=np.uint8)
 
     board_needed  = 5 - len(board)
