@@ -13,6 +13,7 @@ CIFRA ORIGINAL DESCOBERTA:
   - Threshold de match geral:   0.85 (MATCH_THRESHOLD configurável)
 """
 
+import argparse
 import configparser
 import glob
 import json
@@ -41,6 +42,15 @@ ANCHOR_THRESHOLD     = 0.80
 SHOW_DEBUG_WINDOWS   = False
 EQUITY_SIMULATIONS   = 800
 EQUITY_OPPONENTS     = 2
+
+# ── ID do jogador local (definido via --player na CLI) ────────────────────────
+PLAYER_ID: str = "1"
+
+# ── Estado compartilhado recebido do cerebro-central ─────────────────────────
+# Lista consolidada de todas as cartas conhecidas na sala (mãos dos 3 jogadores + board).
+# Atualizada via evento "shared_state" enviado pelo servidor.
+_known_dead_cards: list[str] = []
+_dead_cards_lock   = threading.Lock()
 
 _STREET_MAP: dict[int, str] = {0: "Preflop", 3: "Flop", 4: "Turn", 5: "River"}
 
@@ -85,12 +95,17 @@ class _EquityCache:
                 return
             self._busy = True
 
+        # Captura snapshot das dead cards no momento do lançamento (thread-safe)
+        with _dead_cards_lock:
+            dead_snapshot = list(_known_dead_cards)
+
         def _worker() -> None:
             try:
                 result = calculate_equity(
                     hand[:], board[:],
                     n_opponents=EQUITY_OPPONENTS,
                     n_simulations=EQUITY_SIMULATIONS,
+                    known_dead_cards=dead_snapshot,
                 )
                 street = _STREET_MAP.get(len(board), "Preflop")
                 advice = get_advice(result["equity"], street)
@@ -515,26 +530,14 @@ def process_frame(
 # WEBSOCKET
 # ══════════════════════════════════════════════════════════════════════════════
 
-def on_open(ws: websocket.WebSocketApp) -> None:
-    global _anchor_img, _anchor_std_cx, _anchor_std_cy
-
-    print("[WS] Conectado ao cerebro-central.", flush=True)
-
-    try:
-        hand_regions  = load_hand_regions()
-        board_regions = load_board_regions()
-    except (FileNotFoundError, ValueError) as exc:
-        print(exc, flush=True)
-        ws.close()
-        return
-
-    templates = load_templates()
-    if not templates:
-        print("[TEMPLATES] ERRO CRÍTICO: nenhum template carregado! "
-              f"Verifique os PNGs em {_get_base_dir()}", flush=True)
-
-    _anchor_img, _anchor_std_cx, _anchor_std_cy = load_anchor_config()
-
+def _detection_loop(
+    ws:            websocket.WebSocketApp,
+    hand_regions:  list[dict],
+    board_regions: list[dict],
+    templates:     dict[str, list[np.ndarray]],
+) -> None:
+    """Loop principal de captura/detecção.  Roda em thread daemon separada para
+    que o thread principal do websocket-client possa processar on_message()."""
     prev_hand:  frozenset[str] = frozenset()
     prev_board: frozenset[str] = frozenset()
 
@@ -560,7 +563,12 @@ def on_open(ws: websocket.WebSocketApp) -> None:
                     prev_board = board_set
                     _equity_cache.launch(hand_cards, board_cards)
 
-                ws.send(json.dumps({"event": "update_hands", "payload": hand_cards}))
+                # Inclui player_id no payload de mão para o servidor consolidar
+                ws.send(json.dumps({
+                    "event":     "update_hands",
+                    "player_id": PLAYER_ID,
+                    "payload":   hand_cards,
+                }))
                 ws.send(json.dumps({"event": "update_board", "payload": board_cards}))
 
                 equity = _equity_cache.get()
@@ -571,12 +579,57 @@ def on_open(ws: websocket.WebSocketApp) -> None:
 
         except KeyboardInterrupt:
             print("\n[WS] Encerrando.", flush=True)
+        except Exception as exc:
+            print(f"[DETECT] Erro no loop: {exc}", flush=True)
         finally:
             cv2.destroyAllWindows()
             ws.close()
 
-    if not SHOW_DEBUG_WINDOWS:
-        cv2.destroyAllWindows()
+
+def on_open(ws: websocket.WebSocketApp) -> None:
+    global _anchor_img, _anchor_std_cx, _anchor_std_cy
+
+    print(f"[WS] Conectado ao cerebro-central. (Jogador {PLAYER_ID})", flush=True)
+
+    try:
+        hand_regions  = load_hand_regions()
+        board_regions = load_board_regions()
+    except (FileNotFoundError, ValueError) as exc:
+        print(exc, flush=True)
+        ws.close()
+        return
+
+    templates = load_templates()
+    if not templates:
+        print("[TEMPLATES] ERRO CRÍTICO: nenhum template carregado! "
+              f"Verifique os PNGs em {_get_base_dir()}", flush=True)
+
+    _anchor_img, _anchor_std_cx, _anchor_std_cy = load_anchor_config()
+
+    # Inicia detecção em thread daemon → libera este thread para processar on_message()
+    threading.Thread(
+        target=_detection_loop,
+        args=(ws, hand_regions, board_regions, templates),
+        daemon=True,
+        name=f"detection-player{PLAYER_ID}",
+    ).start()
+
+
+def on_message(ws: websocket.WebSocketApp, message: str) -> None:
+    """Recebe eventos do servidor — em especial 'shared_state' com dead cards consolidadas."""
+    global _known_dead_cards
+    try:
+        data = json.loads(message)
+        event = data.get("event")
+
+        if event == "shared_state":
+            dead = data.get("dead_cards", [])
+            with _dead_cards_lock:
+                _known_dead_cards = list(dead)
+            print(f"[SHARED] Dead cards recebidas ({len(dead)}): {dead}", flush=True)
+
+    except (json.JSONDecodeError, KeyError) as exc:
+        print(f"[WS] Mensagem inválida ignorada: {exc}", flush=True)
 
 
 def on_error(ws: websocket.WebSocketApp, error: Exception) -> None:
@@ -588,10 +641,27 @@ def on_close(ws: websocket.WebSocketApp, code: int, msg: str) -> None:
 
 
 def main() -> None:
+    global PLAYER_ID
+
+    parser = argparse.ArgumentParser(
+        description="Vision Worker — PLO6 Overlay de Transmissão",
+    )
+    parser.add_argument(
+        "--player",
+        default="1",
+        metavar="ID",
+        help="ID deste jogador na sala (1=streamer, 2-3=convidados). Padrão: 1",
+    )
+    args = parser.parse_args()
+    PLAYER_ID = args.player
+
+    print(f"[INIT] Vision-Worker iniciado como Jogador {PLAYER_ID}", flush=True)
     print(f"[INIT] Conectando a {WEBSOCKET_URL} ...", flush=True)
+
     ws_app = websocket.WebSocketApp(
         WEBSOCKET_URL,
         on_open=on_open,
+        on_message=on_message,
         on_error=on_error,
         on_close=on_close,
     )
