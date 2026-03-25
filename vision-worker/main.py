@@ -641,7 +641,7 @@ def on_close(ws: websocket.WebSocketApp, code: int, msg: str) -> None:
 
 
 def main() -> None:
-    global PLAYER_ID
+    global PLAYER_ID, WEBSOCKET_URL, GLOBAL_OFFSET_X, GLOBAL_OFFSET_Y
 
     parser = argparse.ArgumentParser(
         description="Vision Worker — PLO6 Overlay de Transmissão",
@@ -652,10 +652,35 @@ def main() -> None:
         metavar="ID",
         help="ID deste jogador na sala (1=streamer, 2-3=convidados). Padrão: 1",
     )
+    parser.add_argument(
+        "--server",
+        default=WEBSOCKET_URL,
+        metavar="URL",
+        help=f"URL do cerebro-central. Padrão: {WEBSOCKET_URL}",
+    )
+    parser.add_argument(
+        "--offset-x",
+        type=int,
+        default=0,
+        metavar="PX",
+        help="Deslocamento horizontal inicial da janela do emulador (pixels). Padrão: 0",
+    )
+    parser.add_argument(
+        "--offset-y",
+        type=int,
+        default=0,
+        metavar="PX",
+        help="Deslocamento vertical inicial da janela do emulador (pixels). Padrão: 0",
+    )
     args = parser.parse_args()
-    PLAYER_ID = args.player
+    PLAYER_ID       = args.player
+    WEBSOCKET_URL   = args.server
+    GLOBAL_OFFSET_X = args.offset_x
+    GLOBAL_OFFSET_Y = args.offset_y
 
     print(f"[INIT] Vision-Worker iniciado como Jogador {PLAYER_ID}", flush=True)
+    if GLOBAL_OFFSET_X or GLOBAL_OFFSET_Y:
+        print(f"[INIT] Offset inicial: ({GLOBAL_OFFSET_X}, {GLOBAL_OFFSET_Y})", flush=True)
     print(f"[INIT] Conectando a {WEBSOCKET_URL} ...", flush=True)
 
     ws_app = websocket.WebSocketApp(

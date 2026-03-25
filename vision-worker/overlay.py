@@ -11,12 +11,15 @@ from PIL import Image, ImageTk
 class DraggableOverlayWindow(tk.Toplevel):
     """Janela topmost, sem borda, que pode ser arrastada pelo usuário."""
 
-    def __init__(self, master, overlay_type: str, title: str = ""):
+    def __init__(self, master, overlay_type: str, title: str = "",
+                 save_key: str = ""):
         super().__init__(master)
         self.overrideredirect(True)
         self.wm_attributes("-topmost", True)
         self.config(bg="white")
         self.overlay_type = overlay_type
+        # save_key permite diferenciar overlays de mesas diferentes (ex: "hand_2")
+        self._save_key    = save_key if save_key else overlay_type
         self._start_x: int | None = None
         self._start_y: int | None = None
 
@@ -41,7 +44,7 @@ class DraggableOverlayWindow(tk.Toplevel):
 
     def _stop_move(self, event):
         self.master.resume_monitoring()
-        self.master.save_overlay_position(self.overlay_type,
+        self.master.save_overlay_position(self._save_key,
                                           self.winfo_x(), self.winfo_y())
 
     # ── Conteúdo ──────────────────────────────────────────────────────────────
